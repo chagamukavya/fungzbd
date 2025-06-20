@@ -147,9 +147,6 @@ if (i < 0) {
 
 sequential_zone_write(fd, &zones[ZONE_INDEX], " one more!", &nr);
 
-
-   
-fsync(fd);
  int i1=sequential_zone_read_all(fd , &zones[ZONE_INDEX]);
  if (i1< 0) {
         fprintf(stderr, "zbd write failed\n");
