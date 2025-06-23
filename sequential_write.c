@@ -8,7 +8,8 @@
 #define DEVICE "/dev/sde"
 #define BUFFER_SIZE 4096
 #define SECTOR_SIZE 512
-#define ZONE_INDEX 5
+#define ZONE_INDEX 7
+
 int sequential_zone_read_all(int fd, struct zbd_zone *zone) {
     if (zbd_zone_cnv(zone)) {
         printf("Zone is conventional. Use random read instead.\n");
@@ -16,37 +17,38 @@ int sequential_zone_read_all(int fd, struct zbd_zone *zone) {
     }
 
     uint64_t offset = zone->start;
-    uint64_t length = zbd_zone_wp(zone)- zone->start;
+    uint64_t wp = zbd_zone_wp(zone);
+    uint64_t length = wp - offset;
 
     if (length == 0) {
         printf("Zone is empty. Nothing to read.\n");
         return 0;
     }
 
-    char *buffer = malloc(length + 1);
-    if (!buffer) {
-        perror("malloc failed");
-        return -1;
-    }
+    char buffer[BUFFER_SIZE + 1];
+    ssize_t ret;
+    uint64_t total_read = 0;
 
     if (lseek(fd, offset, SEEK_SET) < 0) {
         perror("lseek failed");
-        free(buffer);
         return -1;
     }
 
-    ssize_t ret = read(fd, buffer, length);
-    if (ret < 0) {
-        perror("read failed");
-        free(buffer);
-        return -1;
+    printf("Reading %lu bytes from zone...\n", length);
+    while (total_read < length) {
+        size_t to_read = (length - total_read > BUFFER_SIZE) ? BUFFER_SIZE : (length - total_read);
+        ret = read(fd, buffer, to_read);
+        if (ret < 0) {
+            perror("read failed");
+            return -1;
+        }
+        buffer[ret] = '\0';
+        printf("%s", buffer);
+        total_read += ret;
     }
 
-    buffer[ret] = '\0';  
-    printf("Read %zd bytes from zone:\n%s\n", ret, buffer);
-
-    free(buffer);
-    return ret;
+    printf("\nTotal read: %lu bytes\n", total_read);
+    return total_read;
 }
 
 
@@ -99,10 +101,12 @@ int sequential_zone_write(int fd, struct zbd_zone *zone, const char *data, unsig
         return -1;
     }
 
-    ret = write(fd, data, strlen(data));
+    ret = pwrite(fd, data, strlen(data), offset );
     if (ret < 0) {
-        perror("Write failed");
-        return -1;
+        perror("Failed to write to zone");
+        free(zone);
+        zbd_close(fd);
+        return EXIT_FAILURE;
     }
 
     printf("Updated write pointer: %lu\n", (unsigned long)zbd_zone_wp(zone));
@@ -131,27 +135,42 @@ int main() {
         return 1;
     }
 
-    if (zbd_report_zones(fd, 0, info.nr_sectors * SECTOR_SIZE, ZBD_RO_ALL, zones, &nr) != 0) {
-        perror("zbd_report_zones failed");
+   int  ret = zbd_list_zones(fd, 0, info.nr_sectors * 512ULL, ZBD_RO_ALL, &zones, &nr);
+        if (ret != 0) {
+        perror("zbd_list_zones failed");
         free(zones);
-        zbd_close(fd);
+        close(fd);
         return 1;
     }
 
-    char write_data[] = "checking second write one more!";
+printf("Zone %d: start=%lu, len=%lu, wp=%lu, type=%s\n", 
+       ZONE_INDEX,
+       zones[ZONE_INDEX].start,
+       zones[ZONE_INDEX].len,
+       zbd_zone_wp(&zones[ZONE_INDEX]),
+       zbd_zone_cnv(&zones[ZONE_INDEX]) ? "conventional" : "sequential");
+
+    char write_data[] = "checking second write one more this is on 7!";
     
 int i = sequential_zone_write(fd, &zones[ZONE_INDEX], write_data, &nr);
 if (i < 0) {
      fprintf(stderr, "zbd write failed\n");
 }
-
-sequential_zone_write(fd, &zones[ZONE_INDEX], " one more!", &nr);
-
- int i1=sequential_zone_read_all(fd , &zones[ZONE_INDEX]);
- if (i1< 0) {
-        fprintf(stderr, "zbd write failed\n");
-    }
-
+fsync(fd);
+int i1=sequential_zone_write(fd, &zones[ZONE_INDEX], " one more on 7th!", &nr);
+if(i<0){
+ printf(" this is failed seonc one");
+}
+fsync(fd);
+int i2=sequential_zone_write(fd, &zones[ZONE_INDEX], " this is shit on 7th!", &nr);
+if(i2<0){
+    printf("this shit also failed");
+}
+fsync(fd);
+int i3=sequential_zone_read_all(fd, &zones[ZONE_INDEX]);
+if(i3<0){
+    printf("read also failed");
+}
     free(zones);
     zbd_close(fd);
     return 0;
